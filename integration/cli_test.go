@@ -3,14 +3,15 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/sergi/go-diff/diffmatchpatch"
-	"gopkg.in/yaml.v3"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/sergi/go-diff/diffmatchpatch"
+	"gopkg.in/yaml.v3"
 
 	"reflect"
 )
@@ -157,6 +158,7 @@ func TestCliScenarios(t *testing.T) {
 							err,
 							output)
 					}
+					registerRepoCleanup(t, tt.Repo)
 
 					if len(tc.GrogArgs) == 0 {
 						// Skip the test step if the setup command only runs
@@ -175,7 +177,7 @@ func TestCliScenarios(t *testing.T) {
 					output, err := runBinary(tc.GrogArgs, tt.Repo, tc.EnvVars, coverDir)
 
 					if err != nil && !tc.ExpectFail {
-						fmt.Printf("Command ouput: %s\n", output)
+						fmt.Printf("Command output: %s\n", output)
 						t.Fatal(err)
 					}
 
@@ -238,9 +240,7 @@ func runBinary(args []string, repoPath string, extraEnvVars []string, coverDir s
 	// so that the coverage report is written to the correct location
 	cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir)
 	cmd.Env = append(cmd.Env, "GROG_DISABLE_NON_DETERMINISTIC_LOGGING=true")
-	for _, envVar := range extraEnvVars {
-		cmd.Env = append(cmd.Env, envVar)
-	}
+	cmd.Env = append(cmd.Env, extraEnvVars...)
 
 	// Uncomment to enable debug logging
 	// TODO move to makefile flag
@@ -256,6 +256,43 @@ func runSetupCommand(command string, repoPath string) ([]byte, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = repoPath
 	return cmd.CombinedOutput()
+}
+
+func registerRepoCleanup(t *testing.T, repoPath string) {
+	t.Helper()
+
+	repoDirectory := filepath.Join("./integration/test_repos", repoPath)
+	cleanupFilePath := filepath.Join(repoDirectory, ".grog-test-cleanup")
+	cleanupFileContents, err := os.ReadFile(cleanupFilePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		t.Fatalf("could not read cleanup file %s: %v", cleanupFilePath, err)
+	}
+
+	var directoriesToRemove []string
+	for _, line := range strings.Split(string(cleanupFileContents), "\n") {
+		directoryToRemove := strings.TrimSpace(line)
+		if directoryToRemove == "" {
+			continue
+		}
+		directoriesToRemove = append(directoriesToRemove, directoryToRemove)
+	}
+	if len(directoriesToRemove) == 0 {
+		return
+	}
+
+	t.Cleanup(func() {
+		for _, directoryToRemove := range directoriesToRemove {
+			if err := os.RemoveAll(directoryToRemove); err != nil {
+				t.Errorf("could not remove cleanup directory %s: %v", directoryToRemove, err)
+			}
+		}
+		if err := os.Remove(cleanupFilePath); err != nil && !os.IsNotExist(err) {
+			t.Errorf("could not remove cleanup file %s: %v", cleanupFilePath, err)
+		}
+	})
 }
 
 func getCoverDir() (string, error) {

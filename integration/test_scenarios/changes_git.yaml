@@ -1,0 +1,9 @@
+name: changes git repo
+repo: changes_git
+cases:
+  - name: changes_git_repo
+    setup_command: ../../scripts/setup_changes_repo.sh git
+    grog_args:
+      - changes
+      - --since=HEAD~1
+      - --dependents=transitive

@@ -1,0 +1,9 @@
+name: changes jj repo
+repo: changes_jj
+cases:
+  - name: changes_jj_repo
+    setup_command: ../../scripts/setup_changes_repo.sh jj
+    grog_args:
+      - changes
+      - --since=@-
+      - --dependents=transitive
