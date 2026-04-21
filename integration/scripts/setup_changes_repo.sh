@@ -2,28 +2,42 @@
 set -euo pipefail
 
 change_mode="${1:-}"
+if [[ -z "${GROGTEST_TEMP_DIR:-}" ]]; then
+	printf 'GROGTEST_TEMP_DIR must be set\n' >&2
+	exit 2
+fi
+if [[ -z "${GROGTEST_CLEANUP_FILE:-}" ]]; then
+	printf 'GROGTEST_CLEANUP_FILE must be set\n' >&2
+	exit 2
+fi
+
+work_directory="$GROGTEST_TEMP_DIR"
 origin_directory="$(mktemp -d "/tmp/grog-changes-${change_mode}-origin.XXXXXX")"
-cleanup_file=".grog-test-cleanup"
-setup_complete=false
 
-cleanup() {
-	if [[ "$setup_complete" != "true" && -d "$origin_directory" ]]; then
-		rm -rf "$origin_directory"
-	fi
-}
-
-trap cleanup EXIT
-
+echo "$origin_directory" >"$GROGTEST_CLEANUP_FILE"
 cp -R grog.toml pkg "$origin_directory"/
 
 initialize_origin() (
 	cd "$origin_directory"
-	git init --quiet
+	git init --quiet --initial-branch=main
 	git config user.email grog@example.com
 	git config user.name Grog
+	git config uploadpack.allowFilter true
 	printf 'base\n' >pkg/source.txt
 	git add .
 	git commit --quiet -m base
+)
+
+checkout_origin() (
+	source_directory="$1"
+
+	git clone --no-local --quiet --filter=blob:none "file://$source_directory" "$work_directory"
+
+	(
+		cd "$work_directory"
+		test "$(git config --get remote.origin.promisor)" = "true"
+		test "$(git config --get remote.origin.partialclonefilter)" = "blob:none"
+	)
 )
 
 case "$change_mode" in
@@ -36,18 +50,20 @@ jj)
 		jj git export --quiet
 	)
 	git_root="$(cd "$origin_directory" && jj git root)"
-	rm -rf .git .jj grog.toml pkg
-	git clone --quiet --filter=blob:none --no-checkout "file://$git_root" .
-	git checkout --quiet HEAD
-	jj git init --colocate --quiet
-	printf 'changed\n' >pkg/source.txt
+	checkout_origin "$git_root"
+	(
+		cd "$work_directory"
+		jj git init --colocate --quiet
+		printf 'changed\n' >pkg/source.txt
+	)
 	;;
 dirty)
 	initialize_origin
-	rm -rf .git .jj grog.toml pkg
-	git clone --quiet --filter=blob:none --no-checkout "file://$origin_directory" .
-	git checkout --quiet HEAD
-	printf 'dirty\n' >pkg/source.txt
+	checkout_origin "$origin_directory"
+	(
+		cd "$work_directory"
+		printf 'dirty\n' >pkg/source.txt
+	)
 	;;
 git)
 	initialize_origin
@@ -58,15 +74,10 @@ git)
 		git commit --quiet -m changed
 	)
 
-	rm -rf .git .jj grog.toml pkg
-	git clone --quiet --filter=blob:none --no-checkout "file://$origin_directory" .
-	git checkout --quiet HEAD
+	checkout_origin "$origin_directory"
 	;;
 *)
 	printf 'usage: %s jj|dirty|git\n' "$0" >&2
 	exit 2
 	;;
 esac
-
-printf '%s\n' "$origin_directory" >"$cleanup_file"
-setup_complete=true
