@@ -9,7 +9,10 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
+
+	"grog/internal/shell"
 
 	"github.com/sergi/go-diff/diffmatchpatch"
 	"gopkg.in/yaml.v3"
@@ -18,9 +21,20 @@ import (
 var updateAll = flag.Bool("update-all", false, "update all fixture files")
 var update = flag.String("update", "", "update only the specified fixture file")
 
-var binaryName = "dist/grog"
+var binaryName = grogBinaryName()
 
 var binaryPath = ""
+
+var dockerAvailableOnce sync.Once
+var dockerAvailableCached bool
+
+func isDockerAvailable() bool {
+	dockerAvailableOnce.Do(func() {
+		_, err := exec.LookPath("docker")
+		dockerAvailableCached = err == nil
+	})
+	return dockerAvailableCached
+}
 
 func fixturePath(t *testing.T, testName string) string {
 	_, filename, _, ok := runtime.Caller(0)
@@ -56,6 +70,8 @@ type TestTable struct {
 	RequiresCredentials bool `yaml:"requires_credentials"`
 	// Whether to skip the clean step
 	SkipClean bool `yaml:"skip_clean"`
+	// Only run this test when docker is available on PATH.
+	RequiresDocker bool `yaml:"requires_docker"`
 }
 
 // TestStep defines a single test step
@@ -110,6 +126,11 @@ func TestCliScenarios(t *testing.T) {
 	for _, tt := range testTables {
 		if tt.RequiresCredentials {
 			if os.Getenv("REQUIRES_CREDENTIALS") == "" {
+				continue
+			}
+		}
+		if tt.RequiresDocker {
+			if !isDockerAvailable() {
 				continue
 			}
 		}
@@ -265,10 +286,22 @@ func runSetupCommand(command string, repoPath string, extraEnvVars []string) ([]
 	repoPath = resolveRepoPath(repoPath)
 	fmt.Printf("Running setup command: %s in directory: %s\n", command, repoPath)
 
-	cmd := exec.Command("sh", "-c", command)
+	shellPath, err := shell.LookupPOSIXShell()
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(shellPath, "-c", command)
 	cmd.Env = append(os.Environ(), extraEnvVars...)
 	cmd.Dir = repoPath
 	return cmd.CombinedOutput()
+}
+
+func grogBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "dist/grog.exe"
+	}
+	return "dist/grog"
 }
 
 func resolveRepoPath(repoPath string) string {
